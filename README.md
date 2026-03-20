@@ -83,18 +83,22 @@ flowchart LR
 
 ## 🧠 How the Scanner Works (The Code)
 
-The scanner has two key functions inside `scanner.py`:
+The scanner has two key cost estimation functions inside `scanner.py`:
 
-**`estimate_ec2_cost(instance_type)`** — Looks up how much each EC2 instance type costs per month and flags it if it's idle.
+**`estimate_ec2_cost(instance_type)`**
+Looks up how much each EC2 instance type costs per month. If the instance is sitting idle — it flags it immediately.
 
-**`estimate_rds_cost(db_class)`** — Same logic for RDS databases. For example:
+**`estimate_rds_cost(db_class)`**
+Same logic for RDS databases. For example:
 - `db.t3.micro` → ~$15/month
 - `db.m5.large` → ~$130/month
 - `db.r5.xlarge` → ~$350/month
 
-> 👇 Here's what the scanner code looks like in VS Code:
+If these are idle — you're paying for nothing. The scanner catches them.
 
-![Scanner Code - estimate_ec2_cost and estimate_rds_cost functions](images/scanner-code-functions.png)
+> 👇 Here's the actual scanner code in VS Code:
+
+![](<Screenshot (585).png>)
 
 ---
 
@@ -125,8 +129,8 @@ Provide:
 ### 🔹 Step 2 — Download the Project
 
 ```bash
-git clone https://github.com/your-username/aws-cost-optimizer
-cd aws-cost-optimizer
+git clone https://github.com/arkantandel/-AWS-Cost-Optimizer-Porject
+cd -AWS-Cost-Optimizer-Porject
 ```
 
 ---
@@ -161,17 +165,18 @@ CONFIG = {
 python deploy.py
 ```
 
-This one command automatically creates **everything** in your AWS account. After it runs successfully, you'll see **2 Lambda functions** created in the AWS Console:
+This one command automatically creates **everything** in your AWS account:
+- ✅ Two Lambda functions (Scanner + Executor)
+- ✅ DynamoDB table for storing findings
+- ✅ SNS topic for SMS alerts
+- ✅ EventBridge scheduler (runs every 6 hours)
+- ✅ IAM roles with correct permissions
 
-> 👇 Your Lambda console should look exactly like this:
+> 👇 After deploy, your Lambda console will show exactly 2 functions:
 
-![Lambda Functions Created - cost-optimizer-scanner and cost-optimizer-executor](images/lambda-functions-list.png)
+![](<Screenshot (583).png>)
 
-Both functions are:
-- `cost-optimizer-scanner` → scans your AWS resources
-- `cost-optimizer-executor` → takes action when idle resources are found
-- Runtime: **Python 3.12**
-- Package type: **Zip**
+Both functions use **Python 3.12** runtime and are deployed as **Zip** packages.
 
 ---
 
@@ -180,42 +185,36 @@ Both functions are:
 Go to:
 **AWS Console → Lambda → cost-optimizer-scanner → Configuration → Environment Variables → Edit**
 
-Add these key-value pairs:
+> 👇 Fill in the values exactly like this:
 
-> 👇 Your environment variables page should look like this:
-
-![Lambda Environment Variables Configuration](images/lambda-env-variables.png)
+![](<Screenshot (582).png>)
 
 | Key | Value |
 |---|---|
 | `DYNAMODB_TABLE` | `cost-optimizer-findings` |
-| `SNS_TOPIC_ARN` | *(copy from your SNS console — looks like `arn:aws:sns:us-east-1:XXXX:cost-optimizer-alerts`)* |
+| `SNS_TOPIC_ARN` | `arn:aws:sns:us-east-1:YOUR-ACCOUNT-ID:cost-optimizer-alerts` |
 | `SNS-THRESHOLD` | `5` |
 | `IDLE_DAYS` | `7` |
 
-> ⚠️ **Note:** You can see in the screenshot that `DYNAMODB_TABLE` appears twice — remove the duplicate. Keep `API_BASE_URL` and `APPROVAL_TOKEN` if your deploy script added them.
-
 Click **Save** when done.
+
+> ⚠️ **Important:** If you see `DYNAMODB_TABLE` listed twice (like in the screenshot), remove the duplicate by clicking **Remove** on one of them.
 
 ---
 
 ### 🔹 Step 7 — Test the System Manually
 
-Don't wait 6 hours — trigger the scanner right now from your terminal:
+Trigger the scanner right now from your VS Code terminal:
 
 ```bash
-aws lambda invoke \
-  --function-name cost-optimizer-scanner \
-  --region us-east-1 \
-  --payload "{}" \
-  out.json
+aws lambda invoke --function-name cost-optimizer-scanner --region us-east-1 --payload "{}" out.json
 ```
 
-> 👇 Here's what a successful invocation looks like in VS Code terminal:
+> 👇 This is what a successful test looks like:
 
-![Lambda Invoke Test in VS Code Terminal](images/lambda-invoke-test.png)
+![](<Screenshot (581).png>)
 
-You'll get a response like:
+You'll get:
 ```json
 {
   "StatusCode": 200,
@@ -224,40 +223,41 @@ You'll get a response like:
 }
 ```
 
-> 💡 `StatusCode: 200` means the Lambda was **reached and executed**. If you see `FunctionError: Unhandled`, check the CloudWatch logs in the next step.
+> 💡 `StatusCode: 200` = Lambda was reached and executed. `FunctionError: Unhandled` just means check the logs for details — see next step.
 
 ---
 
 ### 🔹 Step 8 — Check CloudWatch Logs
 
-To see what happened inside the Lambda, run:
+To see what happened inside the Lambda:
 
 ```bash
 aws logs tail /aws/lambda/cost-optimizer-scanner --region us-east-1 --since 5m
 ```
 
-> 👇 This is what the logs look like in the terminal:
+> 👇 Here's what the logs look like:
 
-![CloudWatch Logs showing Lambda execution details](images/cloudwatch-logs.png)
+![](<Screenshot (586).png>)
 
-**Common log messages explained:**
+**Understanding the log output:**
 
 | Log Message | What it means |
 |---|---|
-| `START RequestId` | Lambda started running |
-| `END RequestId` | Lambda finished |
-| `REPORT Duration: 100ms` | How long it took |
-| `Runtime.ImportModuleError` | A Python package is missing — check your zip deployment |
-| `Status: error` | Something went wrong — read the error type |
+| `START RequestId` | Lambda started running ✅ |
+| `END RequestId` | Lambda finished ✅ |
+| `REPORT Duration: ~100ms` | How long it ran |
+| `Runtime.ImportModuleError` | A Python package is missing — re-run `python deploy.py` |
+| `Status: error` | Something went wrong — read the full error message above it |
+| `Memory Used: 46 MB` | Very lightweight — costs almost nothing to run |
 
-> ⚠️ If you see `Runtime.ImportModuleError` — it means a Python library wasn't included in the deployment zip. Re-run `python deploy.py` to fix.
+> ⚠️ If you see `Runtime.ImportModuleError` — it means a dependency wasn't bundled into the zip. Fix: re-run `python deploy.py` to redeploy with all packages included.
 
 ---
 
-### 🔹 Step 9 — Verify Results in DynamoDB
+### 🔹 Step 9 — Verify in DynamoDB
 
 Go to:
-**AWS Console → DynamoDB → Tables → cost-optimizer-findings → Explore items**
+**AWS Console → DynamoDB → Tables → `cost-optimizer-findings` → Explore items**
 
 You'll see entries like:
 ```json
@@ -271,40 +271,40 @@ You'll see entries like:
 
 ---
 
-### 🔹 Step 10 — Check SMS Alert
+### 🔹 Step 10 — Check Your SMS Alert 📲
 
-If a real idle resource was found → **check your phone**. You should receive an SMS from SNS with the finding details. 📲
+If a real idle resource was detected → check your phone. You should receive an SMS from AWS SNS with the finding details.
 
 ---
 
-## 🔁 How Automation Works
+## 🔁 Automation Flow
 
-Once deployed, you don't need to do anything:
+Once deployed, everything runs on its own:
 
 ```
 Every 6 hours
      │
      ▼
-EventBridge fires the Lambda
+EventBridge fires the Lambda scanner
      │
      ▼
-Scanner checks all EC2, RDS resources
+Scans all EC2 + RDS resources
      │
-     ├── Idle found? → Store in DynamoDB → SMS alert sent to you
+     ├── Idle resource found?
+     │         YES → Store in DynamoDB → SMS sent to your phone 📲
      │
-     └── All clean? → Sleep until next trigger
+     └── Nothing found?
+               ✅ All clean → wait for next trigger
 ```
 
 ---
 
-## 🧪 Quick Test Scenario
-
-Want to see it work end to end?
+## 🧪 Test It Yourself
 
 1. Launch a new EC2 instance (t2.micro — free tier)
 2. Don't do anything on it — let it sit idle
 3. Run the scanner manually (Step 7)
-4. Check DynamoDB → your instance should appear
+4. Check DynamoDB → your instance appears as a finding
 5. Check your phone → SMS alert received ✅
 
 ---
@@ -315,7 +315,7 @@ Want to see it work end to end?
 python deploy.py --destroy
 ```
 
-Deletes all Lambda functions, DynamoDB table, SNS topic, EventBridge rules, and IAM roles. Clean slate.
+Deletes all Lambda functions, DynamoDB table, SNS topic, EventBridge rules, and IAM roles in one command.
 
 ---
 
@@ -326,7 +326,7 @@ Deletes all Lambda functions, DynamoDB table, SNS topic, EventBridge rules, and 
 ✅  Auto-detects idle EC2 and RDS instances
 ✅  Real-time SMS alerts when waste is found
 ✅  All findings stored in DynamoDB
-✅  Auto-runs every 6 hours via EventBridge
+✅  Runs automatically every 6 hours
 ✅  One-command deploy AND destroy
 ✅  Configurable thresholds (CPU %, idle days)
 ```
@@ -335,7 +335,7 @@ Deletes all Lambda functions, DynamoDB table, SNS topic, EventBridge rules, and 
 
 ## 🔮 What's Coming Next
 
-- 🔴 **Auto-stop** idle EC2 instances (not just alert — actually act)
+- 🔴 **Auto-stop** idle EC2 instances automatically
 - 📧 **Email + Slack** notifications
 - 🌐 **Web dashboard** to visualize all findings
 - 🔍 **Multi-service scanning** — EBS, S3, and more
